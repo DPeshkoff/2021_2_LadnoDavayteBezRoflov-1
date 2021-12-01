@@ -1,4 +1,4 @@
-module backendServer
+module backendserver
 
 go 1.17
 
