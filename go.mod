@@ -1,4 +1,4 @@
-module backendserver
+module github.com/DPeshkoff/2021_2_LadnoDavayteBezRoflov-1
 
 go 1.17
 
