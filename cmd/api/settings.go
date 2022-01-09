@@ -18,10 +18,12 @@ type Settings struct {
 	BoardsURL         string `mapstructure:"boards_url"`
 	CardListsURL      string `mapstructure:"card_lists_url"`
 	CardsURL          string `mapstructure:"cards_url"`
+	TagsURL           string `mapstructure:"tags_url"`
 	CommentsURL       string `mapstructure:"comments_url"`
 	CheckListsURL     string `mapstructure:"check_lists_url"`
 	CheckListItemsURL string `mapstructure:"check_list_items_url"`
 	UserSearchURL     string `mapstructure:"user_search_url"`
+	AttachmentsURL    string `mapstructure:"attachments_url"`
 
 	ServerAddress         string `mapstructure:"server_address"`
 	SessionServiceAddress string `mapstructure:"session_service_address"`
@@ -38,6 +40,7 @@ type Settings struct {
 
 	LogFilePath       string
 	AvatarsPath       string
+	AttachmentsPath   string
 	DefaultAvatarName string `mapstructure:"default_avatar_name"`
 
 	PostgresDsn string
@@ -74,20 +77,23 @@ func InitSettings() (settings Settings) {
 		BoardsURL:         viper.GetString("url.boards_url"),
 		CardListsURL:      viper.GetString("url.card_lists_url"),
 		CardsURL:          viper.GetString("url.cards_url"),
+		TagsURL:           viper.GetString("url.tags_url"),
 		CommentsURL:       viper.GetString("url.comments_url"),
 		CheckListsURL:     viper.GetString("url.check_lists_url"),
 		CheckListItemsURL: viper.GetString("url.check_list_items_url"),
 		UserSearchURL:     viper.GetString("url.user_search_url"),
+		AttachmentsURL:    viper.GetString("url.attachments_url"),
 
 		ServerAddress:         viper.GetString("server_address"),
 		SessionServiceAddress: viper.GetString("session_service_address"),
 		RabbitMQAddress:       viper.GetString("rabbitmq_address"),
 
-		QueueName: viper.GetString("queue"),
+		QueueName: viper.GetString("queue_name"),
 
 		Origins: []string{
 			"http://localhost:8000",
-			fmt.Sprintf("http://%s", env.FRONTEND_ADDRESS),
+			"http://prometheus:9090",
+			fmt.Sprintf("https://%s", env.FRONTEND_ADDRESS),
 		},
 
 		AllowedMethods: viper.GetStringSlice("allowed_methods"),
@@ -98,6 +104,7 @@ func InitSettings() (settings Settings) {
 
 		LogFilePath:       env.LOG_LOCATION,
 		AvatarsPath:       env.FRONTEND_PATH,
+		AttachmentsPath:   env.FRONTEND_PATH,
 		DefaultAvatarName: viper.GetString("default_avatar_name"),
 
 		PostgresDsn: fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable", env.DATABASE_HOST, env.POSTGRES_USER, env.POSTGRES_PASSWORD, env.POSTGRES_DB, env.DB_PORT),

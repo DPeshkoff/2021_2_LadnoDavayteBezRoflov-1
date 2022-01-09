@@ -3,24 +3,35 @@ package handlers
 import (
 	customErrors "backendServer/pkg/errors"
 	"backendServer/pkg/logger"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/penglongli/gin-metrics/ginmetrics"
 
 	"github.com/google/uuid"
 
 	"github.com/gin-gonic/gin"
 )
 
+var monitorMutex sync.Mutex
+
 type CommonMiddleware interface {
 	Logger() gin.HandlerFunc
 }
 
 type CommonMiddlewareImpl struct {
-	logger logger.Logger
+	logger       logger.Logger
+	metricsMutex sync.Mutex
+	errorMetric  *ginmetrics.Metric
 }
 
 func CreateCommonMiddleware(logger logger.Logger) CommonMiddleware {
-	return &CommonMiddlewareImpl{logger: logger}
+	monitorMutex.Lock()
+	commonMiddlewareImpl := &CommonMiddlewareImpl{logger: logger, errorMetric: ginmetrics.GetMonitor().GetMetric("api_errors")}
+	monitorMutex.Unlock()
+	return commonMiddlewareImpl
 }
 
 func (middleware *CommonMiddlewareImpl) Logger() gin.HandlerFunc {
@@ -37,6 +48,12 @@ func (middleware *CommonMiddlewareImpl) Logger() gin.HandlerFunc {
 		c.Next()
 
 		if len(c.Errors) > 0 {
+			for _, err := range c.Errors {
+				middleware.metricsMutex.Lock()
+				_ = middleware.errorMetric.Inc([]string{strconv.Itoa(customErrors.ResolveErrorToCode(err)), err.Error()})
+				middleware.metricsMutex.Unlock()
+			}
+
 			err := customErrors.FindError(c.Errors.Last())
 			c.JSON(customErrors.ResolveErrorToCode(err), gin.H{"error": err.Error()})
 		}

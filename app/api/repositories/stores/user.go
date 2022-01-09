@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aofei/cameron"
+
 	"github.com/streadway/amqp"
 
 	_ "golang.org/x/image/bmp"
@@ -31,11 +33,11 @@ type UserStore struct {
 	avatarPath        string
 	defaultAvatarName string
 	channel           *amqp.Channel
-	queue             amqp.Queue
+	queueName         string
 }
 
-func CreateUserRepository(db *gorm.DB, avatarPath, defaultAvatarName string, channel *amqp.Channel, queue amqp.Queue) repositories.UserRepository {
-	return &UserStore{db: db, avatarPath: avatarPath, defaultAvatarName: defaultAvatarName, channel: channel, queue: queue}
+func CreateUserRepository(db *gorm.DB, avatarPath, defaultAvatarName string, channel *amqp.Channel, queueName string) repositories.UserRepository {
+	return &UserStore{db: db, avatarPath: avatarPath, defaultAvatarName: defaultAvatarName, channel: channel, queueName: queueName}
 }
 
 func (userStore *UserStore) Create(user *models.User) (err error) {
@@ -54,8 +56,36 @@ func (userStore *UserStore) Create(user *models.User) (err error) {
 		return
 	}
 
-	user.Avatar = strings.Join([]string{userStore.avatarPath, "/", userStore.defaultAvatarName}, "")
-	user.Avatar = strings.Replace(user.Avatar, "/backend", "", -1)
+	isCustomAvatarCreated := false
+
+	fileNameID := uuid.NewString()
+	fileName := strings.Join([]string{userStore.avatarPath, "/", fileNameID, ".webp"}, "")
+
+	out, err := os.Create(fileName)
+	if err != nil {
+		return err
+	}
+	defer func(out *os.File) {
+		_ = out.Close()
+	}(out)
+
+	options, err := encoder.NewLossyEncoderOptions(encoder.PresetDefault, 75)
+
+	if err == nil {
+		err = webp.Encode(out, cameron.Identicon([]byte(fileNameID), 540, 60), options)
+	}
+
+	if err == nil {
+		fileName = strings.Replace(fileName, "/backend", "", -1)
+		user.Avatar = fileName
+		isCustomAvatarCreated = true
+	}
+
+	if !isCustomAvatarCreated {
+		user.Avatar = strings.Join([]string{userStore.avatarPath, "/", userStore.defaultAvatarName}, "")
+		user.Avatar = strings.Replace(user.Avatar, "/backend", "", -1)
+	}
+
 	err = userStore.db.Create(user).Error
 	if err != nil {
 		return
@@ -65,13 +95,14 @@ func (userStore *UserStore) Create(user *models.User) (err error) {
 	if err != nil {
 		return
 	}
+
 	body, err := json.Marshal(publicData)
 	if err != nil {
 		return
 	}
 
-	err = userStore.channel.Publish("", userStore.queue.Name, false, false, amqp.Publishing{
-		DeliveryMode: amqp.Persistent,
+	err = userStore.channel.Publish("", userStore.queueName, false, false, amqp.Publishing{
+		DeliveryMode: amqp.Transient,
 		ContentType:  "text/plain",
 		Body:         body,
 	})
@@ -130,6 +161,9 @@ func (userStore *UserStore) UpdateAvatar(user *models.User, avatar *multipart.Fi
 		if err != nil {
 			return err
 		}
+		defer func(in multipart.File) {
+			_ = in.Close()
+		}(in)
 
 		img, _, err := image.Decode(in)
 		if err != nil {
@@ -140,6 +174,9 @@ func (userStore *UserStore) UpdateAvatar(user *models.User, avatar *multipart.Fi
 		if err != nil {
 			return err
 		}
+		defer func(out *os.File) {
+			_ = out.Close()
+		}(out)
 
 		options, err := encoder.NewLossyEncoderOptions(encoder.PresetDefault, 75)
 		if err != nil {
@@ -154,7 +191,6 @@ func (userStore *UserStore) UpdateAvatar(user *models.User, avatar *multipart.Fi
 		defaultAvatar := strings.Join([]string{userStore.avatarPath, "/", userStore.defaultAvatarName}, "")
 		defaultAvatar = strings.Replace(defaultAvatar, "/backend", "", -1)
 		if oldUser.Avatar != "" && oldUser.Avatar != defaultAvatar {
-			oldUser.Avatar = strings.Join([]string{"/backend", oldUser.Avatar}, "")
 			err = os.Remove(oldUser.Avatar)
 			if err != nil {
 				oldUser.Avatar = strings.Replace(oldUser.Avatar, "/backend", "", -1)
@@ -214,6 +250,28 @@ func (userStore *UserStore) FindBoardMembersByLogin(bid uint, text string, amoun
 			Where("boards.b_id = ? AND LOWER(users.login) LIKE ?", bid, strings.ToLower(text)).
 			Select("users.uid, users.login, users.avatar"),
 	).Limit(amount).Find(users).Error
+
+	return
+}
+
+func (userStore *UserStore) FindBoardInvitedMembersByLogin(bid uint, text string, amount int) (users *[]models.PublicUserInfo, err error) {
+	var uids []uint
+	userStore.db.Table("users").
+		Joins("LEFT OUTER JOIN users_teams ON users_teams.user_uid = users.uid").
+		Joins("LEFT OUTER JOIN teams ON users_teams.team_t_id = teams.t_id").
+		Joins("JOIN boards ON teams.t_id = boards.t_id").
+		Where("boards.b_id = ?", bid).Pluck("users.uid", &uids)
+
+	users = new([]models.PublicUserInfo)
+	text = strings.Join([]string{"%", text, "%"}, "")
+
+	err = userStore.db.Model(&models.User{}).Not(uids).Where("LOWER(login) LIKE ?", strings.ToLower(text)).Limit(amount).Find(users).Error
+	//
+	//err = userStore.db.Table("users").
+	//	Joins("LEFT OUTER JOIN users_boards ON users_boards.user_uid = users.uid").
+	//	Joins("LEFT OUTER JOIN boards ON users_boards.board_b_id = boards.b_id").
+	//	Where("boards.b_id = ? AND LOWER(users.login) LIKE ?", bid, strings.ToLower(text)).
+	//	Select("users.uid, users.login, users.avatar").Limit(amount).Find(users).Error
 
 	return
 }
@@ -289,9 +347,6 @@ func (userStore *UserStore) AddUserToBoard(uid, bid uint) (err error) {
 		}
 
 		err = userStore.db.Model(&models.Board{BID: bid}).Association("Users").Delete(user)
-		if err != nil {
-			return
-		}
 	} else {
 		err = userStore.db.Model(&models.Board{BID: bid}).Association("Users").Append(user)
 	}
@@ -318,7 +373,7 @@ func (userStore *UserStore) AddUserToCard(uid, cid uint) (err error) {
 
 func (userStore *UserStore) GetPublicData(uid uint) (user *models.PublicUserInfo, err error) {
 	user = new(models.PublicUserInfo)
-	err = userStore.db.Model(&models.User{UID: uid}).Find(user).Error
+	err = userStore.db.Model(&models.User{}).Find(user, uid).Error
 	return
 }
 

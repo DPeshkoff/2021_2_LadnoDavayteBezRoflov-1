@@ -1,0 +1,84 @@
+name: Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+  workflow_dispatch:
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.17
+    
+      - name: Checkout code 
+        uses: actions/checkout@v2
+
+      - name: Create env file
+        run: |
+          touch .env
+          echo POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }} >> .env
+          echo POSTGRES_USER=${{ secrets.POSTGRES_USER }} >> .env
+          echo EMAIL_PASSWORD=${{ secrets.EMAIL_PASSWORD }} >> .env
+
+      - name: Set up linter
+        run: sudo apt-get update;
+          sudo apt-get install libwebp-dev;
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.43.0;
+
+      - name: golangci-lint
+        run: golangci-lint run
+
+      - name: Run tests
+        run: sudo apt-get install libwebp-dev; go clean -testcache; go test -race -cover ./...
+
+      - name: Count test coverage
+        run: go test -race -coverpkg=./... -coverprofile=c.out ./...; go tool cover -func=c.out
+
+      - name: Count test coverage (without generated files)
+        run: go test -race -coverpkg=./... -coverprofile cover.out.tmp ./...; cat cover.out.tmp | grep -v "_easyjson.go" > cover1.out.tmp; cat cover1.out.tmp | grep -v ".pb.go" > cover.out ; go tool cover -func cover.out
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: backend
+          path: .
+
+  deploy:
+      runs-on: ubuntu-latest
+
+      needs: build
+
+      steps:
+        - name: Download build
+          uses: actions/download-artifact@v2
+          with:
+            name: backend
+            path: .
+
+        - name: Transfer build files to server
+          uses: appleboy/scp-action@master
+          with:
+            host: ${{ secrets.HOST_IP }}
+            username: ubuntu
+            key: ${{ secrets.PRIVATE_KEY }}
+            source: "./*"
+            target: "/home/ubuntu/02-backend/"
+
+        - name: Reload docker-compose
+          uses: appleboy/ssh-action@master
+          with:
+            host: ${{ secrets.HOST_IP }}
+            username: ubuntu
+            key: ${{ secrets.PRIVATE_KEY }}
+            script: |
+              cd /home/ubuntu/02-backend/
+              screen -XS backend quit
+              screen -dmS backend sudo docker-compose up

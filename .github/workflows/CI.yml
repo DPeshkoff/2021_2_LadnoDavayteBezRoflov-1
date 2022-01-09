@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -23,6 +21,13 @@ jobs:
       - name: Checkout code 
         uses: actions/checkout@v2
 
+      - name: Create env file
+        run: |
+          touch .env
+          echo POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }} >> .env
+          echo POSTGRES_USER=${{ secrets.POSTGRES_USER }} >> .env
+          echo EMAIL_PASSWORD=${{ secrets.EMAIL_PASSWORD }} >> .env
+
       - name: Set up linter
         run: sudo apt-get update;
           sudo apt-get install libwebp-dev;
@@ -32,7 +37,16 @@ jobs:
         run: golangci-lint run
 
       - name: Run tests
-        run: sudo apt-get install libwebp-dev; go clean -testcache; go test -cover ./...
+        run: sudo apt-get install libwebp-dev; go clean -testcache; go test -race -cover ./...
 
       - name: Count test coverage
-        run: go test -coverpkg=./... -coverprofile=c.out ./...; go tool cover -func=c.out
+        run: go test -race -coverpkg=./... -coverprofile=c.out ./...; go tool cover -func=c.out
+      
+      - name: Count test coverage (without generated files)
+        run: go test -race -coverpkg=./... -coverprofile cover.out.tmp ./...; cat cover.out.tmp | grep -v "_easyjson.go" > cover1.out.tmp; cat cover1.out.tmp | grep -v ".pb.go" > cover.out ; go tool cover -func cover.out
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: backend
+          path: .
